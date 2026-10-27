@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- WiX Toolset Configuration for FastDoc Enterprise MSI Installer (.msi) -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="FastDoc Enterprise"
+           Manufacturer="FastDoc Technologies"
+           Version="1.0.0.0"
+           UpgradeCode="7E9A3C2B-4D1E-4F8A-8B6C-5A4E2F1D3C9A"
+           Scope="perUserOrMachine">
+    
+    <MajorUpgrade DowngradeErrorMessage="Versi FastDoc yang lebih baru telah terpasang di komputer ini." />
+    
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="FastDoc">
+        <Component Id="MainExecutable" Guid="3F8B2C1A-5D4E-4F9A-7B5C-6A3E1F4D2C8B">
+          <File Id="FastDocEXE" Source="..\dist\FastDoc\FastDoc.exe" KeyPath="yes">
+            <Shortcut Id="DesktopShortcut"
+                      Directory="DesktopFolder"
+                      Name="FastDoc"
+                      WorkingDirectory="INSTALLFOLDER"
+                      Advertise="yes" />
+            <Shortcut Id="ProgramMenuShortcut"
+                      Directory="ProgramMenuFolder"
+                      Name="FastDoc"
+                      WorkingDirectory="INSTALLFOLDER"
+                      Advertise="yes" />
+          </File>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainProduct" Title="FastDoc Application" Level="1">
+      <ComponentRef Id="MainExecutable" />
+    </Feature>
+  </Package>
+</Wix>
