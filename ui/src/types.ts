@@ -1,12 +1,22 @@
 export interface VariableMeta {
   key: string;
   display_name: string;
-  data_type: 'string' | 'number' | 'date' | 'text_multiline' | 'table' | 'boolean';
+  data_type: 'string' | 'number' | 'date' | 'text_multiline' | 'table' | 'boolean' | 'signature' | 'image';
   is_loop: boolean;
   is_ai_candidate: boolean;
   filters_used: string[];
   raw_tag: string;
   sub_fields?: string[];
+}
+
+export interface MasterSignature {
+  id: string;
+  name: string;
+  role_title?: string;
+  image_data: string;
+  pen_color?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface TemplateSchema {

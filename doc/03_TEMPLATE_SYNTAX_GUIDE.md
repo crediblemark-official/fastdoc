@@ -83,10 +83,13 @@ Digunakan untuk menyisipkan foto profil siswa, foto kegiatan dokumentasi, atau t
 ```jinja2
 {{ image:foto_siswa:width=3cm,height=4cm }}
 {{ image:tanda_tangan_kepsek:width=4.5cm }}
+{{ ttd_guru }}
+{{ ttd_kepsek }}
 ```
 
-* Nilai di dalam data dapat berupa path file lokal (misal: `C:\Users\Foto\Azzam.jpg`) atau data Base64.
-* Jika foto tidak tersedia, sistem akan mengosongkan area tanpa memunculkan pesan error (*graceful fallback*).
+* Nilai di dalam data dapat berupa data Base64 / Data URI canvas (`data:image/png;base64,...`), path file lokal, atau konfigurasi objek.
+* Jika tanda tangan atau foto tidak dibubuhkan, sistem akan mengosongkan area secara elegan tanpa memunculkan error (*graceful fallback*).
+* Sistem FastDoc otomatis menyediakan widget **Signature Canvas Pad** (gores langsung, unggah dengan auto-remove background putih kertas, dan pilihan dari Master Registry).
 
 ---
 

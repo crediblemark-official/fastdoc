@@ -6,7 +6,7 @@ Mesin injeksi template berbasis docxtpl & Jinja2 dengan perlindungan 100% layout
 import io
 import os
 import base64
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, Optional
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 import jinja2
@@ -62,57 +62,128 @@ class TemplateRenderer:
     def _process_special_types(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Menangani tipe data khusus seperti gambar InlineImage (kompatibel path Windows,
-        custom width/height, dictionary metadata, maupun base64 data uri).
+        custom width/height, dictionary metadata, data URI base64, maupun tanda tangan digital).
         """
         clean_ctx = {}
         for k, v in context.items():
-            if isinstance(v, str) and (v.startswith("img:") or v.startswith("image:")):
-                # Potong prefix tanpa merusak drive letter Windows (misal C:\...)
-                prefix_len = 6 if v.startswith("image:") else 4
-                rest = v[prefix_len:].strip()
+            k_lower = k.lower()
+            is_sig_key = any(s in k_lower for s in ["ttd", "tanda_tangan", "tandatangan", "signature", "paraf"])
+            is_img_key = is_sig_key or any(s in k_lower for s in ["foto", "gambar", "logo", "avatar", "image"])
 
-                width_mm = 30.0
-                height_mm = None
+            default_w = 38.0 if is_sig_key else 30.0
 
-                # Dukung opsi pemisah tanda pipa |width=30|height=40
-                if "|" in rest:
-                    parts = rest.split("|")
-                    img_path = parts[0].strip()
-                    for opt in parts[1:]:
-                        opt_lower = opt.lower().strip()
-                        if opt_lower.startswith("width=") or opt_lower.startswith("w="):
-                            try:
-                                width_mm = float(opt.split("=")[1].replace("mm", "").strip())
-                            except ValueError:
-                                pass
-                        elif opt_lower.startswith("height=") or opt_lower.startswith("h="):
-                            try:
-                                height_mm = float(opt.split("=")[1].replace("mm", "").strip())
-                            except ValueError:
-                                pass
-                else:
-                    img_path = rest
+            # 1. Jika value adalah None atau string kosong
+            if v is None or v == "":
+                clean_ctx[k] = "" if is_img_key else v
+                continue
 
-                if os.path.exists(img_path):
-                    kwargs = {"width": Mm(width_mm)}
-                    if height_mm is not None:
-                        kwargs["height"] = Mm(height_mm)
-                    clean_ctx[k] = InlineImage(self.doc, img_path, **kwargs)
-                else:
-                    clean_ctx[k] = ""
+            # 2. Jika value berupa dict konfigurasi gambar / tanda tangan
+            if isinstance(v, dict):
+                img_data = v.get("data_url") or v.get("signature") or v.get("image_data") or v.get("image_path") or v.get("img_path")
+                w_mm = float(v.get("width_mm", default_w))
+                h_mm = float(v["height_mm"]) if "height_mm" in v and v["height_mm"] else None
 
-            elif isinstance(v, dict) and ("image_path" in v or "img_path" in v):
-                # Dukung input berupa objek konfigurasi gambar
-                path = v.get("image_path") or v.get("img_path")
-                width_mm = float(v.get("width_mm", 30))
-                height_mm = v.get("height_mm")
-                if path and os.path.exists(path):
-                    kwargs = {"width": Mm(width_mm)}
-                    if height_mm:
-                        kwargs["height"] = Mm(float(height_mm))
-                    clean_ctx[k] = InlineImage(self.doc, path, **kwargs)
-                else:
-                    clean_ctx[k] = ""
-            else:
-                clean_ctx[k] = v
+                res = self._create_inline_image(img_data, width_mm=w_mm, height_mm=h_mm)
+                clean_ctx[k] = res if res is not None else ""
+                continue
+
+            # 3. Jika value berupa string
+            if isinstance(v, str):
+                v_trimmed = v.strip()
+
+                # Cek jika diawali data URL (seperti hasil canvas tanda tangan)
+                if v_trimmed.startswith("data:image/"):
+                    res = self._create_inline_image(v_trimmed, width_mm=default_w)
+                    clean_ctx[k] = res if res is not None else ""
+                    continue
+
+                # Cek jika menggunakan prefix (image:, img:, atau sig:)
+                if v_trimmed.startswith(("image:", "img:", "sig:")):
+                    prefix_len = v_trimmed.find(":") + 1
+                    rest = v_trimmed[prefix_len:].strip()
+
+                    w_mm = default_w
+                    h_mm = None
+
+                    if "|" in rest:
+                        parts = rest.split("|")
+                        src = parts[0].strip()
+                        for opt in parts[1:]:
+                            opt_lower = opt.lower().strip()
+                            if opt_lower.startswith(("width=", "w=")):
+                                try:
+                                    val_str = opt.split("=")[1].strip()
+                                    if "cm" in val_str:
+                                        w_mm = float(val_str.replace("cm", "")) * 10
+                                    else:
+                                        w_mm = float(val_str.replace("mm", ""))
+                                except ValueError:
+                                    pass
+                            elif opt_lower.startswith(("height=", "h=")):
+                                try:
+                                    val_str = opt.split("=")[1].strip()
+                                    if "cm" in val_str:
+                                        h_mm = float(val_str.replace("cm", "")) * 10
+                                    else:
+                                        h_mm = float(val_str.replace("mm", ""))
+                                except ValueError:
+                                    pass
+                    else:
+                        src = rest
+
+                    res = self._create_inline_image(src, width_mm=w_mm, height_mm=h_mm)
+                    clean_ctx[k] = res if res is not None else ""
+                    continue
+
+                # Cek jika variabel bertipe signature / image dan bernilai path lokal
+                if is_img_key and os.path.exists(v_trimmed):
+                    res = self._create_inline_image(v_trimmed, width_mm=default_w)
+                    clean_ctx[k] = res if res is not None else ""
+                    continue
+
+            clean_ctx[k] = v
+
         return clean_ctx
+
+    def _create_inline_image(
+        self,
+        source: Any,
+        width_mm: float = 30.0,
+        height_mm: Optional[float] = None
+    ) -> Optional[InlineImage]:
+        """
+        Membuat objek InlineImage dari data URL base64, buffer bytes, atau file path lokal.
+        """
+        if not source or not isinstance(source, (str, bytes, io.BytesIO)):
+            return None
+
+        kwargs = {"width": Mm(width_mm)}
+        if height_mm is not None:
+            kwargs["height"] = Mm(height_mm)
+
+        try:
+            # 1. Kasus Data URL (data:image/...)
+            if isinstance(source, str) and source.startswith("data:image/"):
+                _, b64_part = source.split(",", 1)
+                img_bytes = base64.b64decode(b64_part)
+                return InlineImage(self.doc, io.BytesIO(img_bytes), **kwargs)
+
+            # 2. Kasus Bytes langsung
+            if isinstance(source, bytes):
+                return InlineImage(self.doc, io.BytesIO(source), **kwargs)
+
+            # 3. Kasus BytesIO
+            if isinstance(source, io.BytesIO):
+                source.seek(0)
+                return InlineImage(self.doc, source, **kwargs)
+
+            # 4. Kasus path file lokal
+            if isinstance(source, str) and os.path.exists(source):
+                return InlineImage(self.doc, source, **kwargs)
+
+        except Exception as e:
+            # Fallback aman jika format gambar tidak valid
+            print(f"[TemplateRenderer] Gagal menyematkan gambar: {e}")
+            return None
+
+        return None

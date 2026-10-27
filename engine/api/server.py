@@ -9,7 +9,7 @@ import io
 import uuid
 import shutil
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -32,6 +32,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    # Cegah caching pada file HTML agar browser selalu mengambil aset Vite terbaru
+    path = request.url.path
+    if path == "/" or path.endswith(".html") or not "." in path.split("/")[-1]:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 # Inisialisasi Database SQLite Lokal & Seeding
 from engine.db.database import seed_initial_demo_data

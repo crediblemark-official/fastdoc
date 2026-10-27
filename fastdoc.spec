@@ -29,6 +29,7 @@ hiddenimports = [
     'uvicorn.lifespan.on',
     'fastapi',
     'starlette',
+    'pydantic',
     'docxtpl',
     'docx',
     'openpyxl',
@@ -36,6 +37,7 @@ hiddenimports = [
     'defusedxml',
     'python_multipart',
     'webview',
+    'mammoth',
 ] + collect_submodules('engine')
 
 a = Analysis(

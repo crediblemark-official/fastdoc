@@ -6,7 +6,8 @@ import {
   Plus, 
   X, 
   Award, 
-  ShieldCheck
+  ShieldCheck,
+  PenTool
 } from 'lucide-react';
 import type { Workspace } from '../types';
 
@@ -16,8 +17,11 @@ interface ExplorerSidebarProps {
   onSelectWorkspace: (id: string) => void;
   onSelectMasterData: () => void;
   isMasterDataActive: boolean;
+  onSelectSignatures: () => void;
+  isSignaturesActive: boolean;
   onCreateWorkspace: (name: string, description: string, category: string) => void;
   totalMasterEntities: number;
+  totalSignatures: number;
 }
 
 export const ExplorerSidebar = ({
@@ -26,8 +30,11 @@ export const ExplorerSidebar = ({
   onSelectWorkspace,
   onSelectMasterData,
   isMasterDataActive,
+  onSelectSignatures,
+  isSignaturesActive,
   onCreateWorkspace,
   totalMasterEntities,
+  totalSignatures,
 }: ExplorerSidebarProps) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [newWsName, setNewWsName] = useState('');
@@ -57,7 +64,7 @@ export const ExplorerSidebar = ({
         </div>
 
         {workspaces.map((ws) => {
-          const isActive = !isMasterDataActive && ws.id === activeWorkspaceId;
+          const isActive = !isMasterDataActive && !isSignaturesActive && ws.id === activeWorkspaceId;
           return (
             <div
               key={ws.id}
@@ -95,6 +102,18 @@ export const ExplorerSidebar = ({
             <span className="sidebar-item-text">Master Data Siswa</span>
           </div>
           <span className="sidebar-count">{totalMasterEntities}</span>
+        </div>
+
+        <div
+          className={`sidebar-nav-item ${isSignaturesActive ? 'active' : ''}`}
+          onClick={onSelectSignatures}
+          title="Master Tanda Tangan Digital Resmi (Pejabat & Guru)"
+        >
+          <div className="sidebar-item-left">
+            <PenTool size={15} color={isSignaturesActive ? 'var(--accent-blue)' : '#8B5CF6'} />
+            <span className="sidebar-item-text">Master Tanda Tangan</span>
+          </div>
+          <span className="sidebar-count">{totalSignatures}</span>
         </div>
       </div>
 

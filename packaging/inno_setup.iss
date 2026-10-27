@@ -2,7 +2,9 @@
 ; Menghasilkan installer FastDoc-Setup-1.0.0.exe dengan setup wizard modern
 
 #define MyAppName "FastDoc"
+#ifndef MyAppVersion
 #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "FastDoc Technologies"
 #define MyAppURL "https://github.com/fastdoc"
 #define MyAppExeName "FastDoc.exe"
@@ -19,6 +21,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist_installer
 OutputBaseFilename=FastDoc-Setup-{#MyAppVersion}
+SetupIconFile=icon.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -26,7 +29,6 @@ PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64
 
 [Languages]
-Name: "indonesian"; MessagesFile: "compiler:Languages\Indonesian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]

@@ -212,6 +212,91 @@ class TestFastDocEngine(unittest.TestCase):
         self.assertIn("Azzam Alano", html)
         self.assertIn("LAPORAN HASIL BELAJAR", html)
 
+    def test_signature_scanner_and_renderer(self):
+        """Uji deteksi variabel tanda tangan oleh scanner dan injeksi InlineImage data URI oleh renderer"""
+        from PIL import Image, ImageDraw
+        import base64
+
+        # 1. Buat docx dengan variabel tanda tangan
+        doc = Document()
+        doc.add_paragraph("Pihak Pertama: {{ nama_pejabat }}")
+        doc.add_paragraph("Tanda Tangan: {{ ttd_kepsek }}")
+        doc.add_paragraph("Tanda Tangan Gambar: {{ image:ttd_guru:width=4.5cm }}")
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+
+        # 2. Uji Scanner
+        scanner = DocxTagScanner(buf)
+        schema = scanner.scan()
+        var_map = {v.key: v for v in schema.variables}
+
+        self.assertIn("ttd_kepsek", var_map)
+        self.assertIn("ttd_guru", var_map)
+        self.assertEqual(var_map["ttd_kepsek"].data_type, "signature")
+        self.assertEqual(var_map["ttd_guru"].data_type, "signature")
+        self.assertEqual(var_map["ttd_kepsek"].display_name, "Tanda Tangan Kepala Sekolah")
+
+        # 3. Buat Data URL Tanda Tangan PNG
+        im = Image.new('RGBA', (200, 80), color=(255, 255, 255, 0))
+        d = ImageDraw.Draw(im)
+        d.line([(10, 40), (190, 40)], fill=(30, 58, 138, 255), width=3)
+        img_buf = io.BytesIO()
+        im.save(img_buf, format='PNG')
+        sig_data_url = 'data:image/png;base64,' + base64.b64encode(img_buf.getvalue()).decode()
+
+        # 4. Render ke Dokumen
+        buf.seek(0)
+        renderer = TemplateRenderer(buf)
+        renderer.render({
+            "nama_pejabat": "Sri Wastuti, S.Pd.",
+            "ttd_kepsek": sig_data_url,
+            "ttd_guru": ""  # Kosong (graceful fallback)
+        })
+        out_stream = renderer.save_to_stream()
+
+        # 5. Uji Pratinjau HTML dengan Mammoth
+        from engine.core.preview_renderer import PreviewRenderer
+        out_stream.seek(0)
+        preview_html = PreviewRenderer.render_preview_html(out_stream)
+        self.assertIn("<img", preview_html)
+        self.assertIn("Sri Wastuti", preview_html)
+
+    def test_master_signatures_crud(self):
+        """Uji penyimpanan dan pengelolaan Master Signatures di SQLite"""
+        from engine.db.database import (
+            init_db,
+            get_master_signatures,
+            upsert_master_signature,
+            get_master_signature_by_id,
+            delete_master_signature
+        )
+        init_db()
+
+        # 1. Tambah Tanda Tangan Baru
+        new_sig = upsert_master_signature(
+            name="Drs. H. Mulyadi, M.Pd.",
+            role_title="Pengawas Pembina PAUD",
+            image_data="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+            pen_color="#1E3A8A"
+        )
+        self.assertIsNotNone(new_sig)
+        sig_id = new_sig["id"]
+        self.assertEqual(new_sig["name"], "Drs. H. Mulyadi, M.Pd.")
+
+        # 2. Ambil by ID
+        fetched = get_master_signature_by_id(sig_id)
+        self.assertEqual(fetched["role_title"], "Pengawas Pembina PAUD")
+
+        # 3. Ambil Semua
+        all_sigs = get_master_signatures()
+        self.assertGreaterEqual(len(all_sigs), 1)
+
+        # 4. Hapus
+        deleted = delete_master_signature(sig_id)
+        self.assertTrue(deleted)
+        self.assertIsNone(get_master_signature_by_id(sig_id))
+
 
 if __name__ == "__main__":
     unittest.main()

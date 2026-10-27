@@ -9,6 +9,7 @@ __pycache__/
 # Distribution / packaging
 build/
 dist/
+dist_installer/
 downloads/
 eggs/
 .eggs/
@@ -30,6 +31,10 @@ env/
 
 # FastDoc local storage & cache
 .fastdoc/
+.emocis/
+*.db
+*.sqlite
+*.sqlite3
 samples/*.zip
 
 # Node / Frontend UI

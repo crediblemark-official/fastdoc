@@ -88,6 +88,19 @@ def init_db():
     )
     """)
 
+    # 5. Tabel Master Signatures (Tanda Tangan Digital & Arsip Pejabat)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS master_signatures (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        role_title TEXT,
+        image_data TEXT NOT NULL,
+        pen_color TEXT DEFAULT '#1E3A8A',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -127,6 +140,9 @@ def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
     templates = [dict(t) for t in cursor.fetchall()]
     for t in templates:
         t["schema"] = json.loads(t["schema_json"])
+    # Pastikan template yang berstatus aktif di workspaces.active_template_id berada di urutan pertama
+    if ws.get("active_template_id"):
+        templates.sort(key=lambda x: 0 if x["id"] == ws["active_template_id"] else 1)
     ws["templates"] = templates
 
     # Ambil data records di workspace ini
@@ -303,16 +319,162 @@ def delete_workspace_record(record_id: str) -> bool:
 
 
 # ==============================================================================
-# Seeding Awal Data Nyata (Kenzi, Azzam, Qiyas, Rayyan, Inara)
+# Master Signatures Registry (Tanda Tangan Digital Tersimpan)
+# ==============================================================================
+
+def get_master_signatures() -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM master_signatures ORDER BY created_at ASC")
+    rows = cursor.fetchall()
+    result = [dict(r) for r in rows]
+    conn.close()
+    return result
+
+
+def get_master_signature_by_id(sig_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM master_signatures WHERE id = ?", (sig_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def upsert_master_signature(
+    name: str,
+    role_title: str = "",
+    image_data: str = "",
+    pen_color: str = "#1E3A8A",
+    sig_id: Optional[str] = None
+) -> Dict[str, Any]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now = datetime.now().isoformat()
+
+    if sig_id:
+        cursor.execute("""
+        UPDATE master_signatures
+        SET name = ?, role_title = ?, image_data = ?, pen_color = ?, updated_at = ?
+        WHERE id = ?
+        """, (name, role_title, image_data, pen_color, now, sig_id))
+        target_id = sig_id
+    else:
+        target_id = f"sig_{uuid.uuid4().hex[:8]}"
+        cursor.execute("""
+        INSERT INTO master_signatures (id, name, role_title, image_data, pen_color, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (target_id, name, role_title, image_data, pen_color, now, now))
+
+    conn.commit()
+    conn.close()
+    return get_master_signature_by_id(target_id)
+
+
+def delete_master_signature(sig_id: str) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM master_signatures WHERE id = ?", (sig_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def generate_demo_signature_data_url(style: int = 1) -> str:
+    """
+    Menghasilkan data URL PNG transparan tanda tangan digital baku.
+    """
+    try:
+        from PIL import Image, ImageDraw
+        import io
+        import base64
+        im = Image.new('RGBA', (400, 140), color=(255, 255, 255, 0))
+        d = ImageDraw.Draw(im)
+        ink = (30, 58, 138, 255)  # Biru Resmi Dokumen (Navy Blue)
+        if style == 1:
+            # Goresan mengalir untuk Kepala Sekolah (Sri Wastuti, S.Pd.)
+            points = [(40, 95), (60, 40), (80, 110), (105, 50), (130, 85), (150, 70), (180, 85), (210, 45), (240, 80), (280, 60), (330, 55), (370, 70)]
+            d.line(points, fill=ink, width=4, joint='curve')
+            d.arc((35, 30, 115, 120), start=30, end=300, fill=ink, width=4)
+            d.line([(50, 115), (360, 95)], fill=ink, width=3)
+            d.line([(310, 80), (335, 115)], fill=ink, width=3)
+        else:
+            # Goresan dinamis untuk Guru Kelompok (Puput Novia Dewi, S.Pd.)
+            points = [(45, 110), (55, 35), (95, 38), (90, 75), (55, 75), (95, 110), (130, 60), (160, 90), (190, 65), (220, 85), (260, 50), (310, 85), (350, 65)]
+            d.line(points, fill=ink, width=4, joint='curve')
+            d.line([(40, 120), (360, 112)], fill=ink, width=3)
+            d.arc((120, 45, 160, 95), start=0, end=360, fill=ink, width=3)
+        buf = io.BytesIO()
+        im.save(buf, format='PNG')
+        return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
+    except Exception as e:
+        print(f"Gagal generate tanda tangan demo: {e}")
+        return ""
+
+
+# ==============================================================================
+# Seeding Awal Data Nyata (Kenzi, Azzam, Qiyas, Rayyan, Inara + Signatures)
 # ==============================================================================
 
 def seed_initial_demo_data():
     """
-    Mengisi data awal jika database masih kosong.
+    Mengisi data awal jika database masih kosong, serta memastikan
+    master signatures dan template schema mutakhir.
     """
     init_db()
+
+    # 1. Pastikan Master Signatures selalu terisi tanda tangan baku jika masih kosong
     conn = get_db_connection()
     cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) as count FROM master_signatures")
+    sig_count = cursor.fetchone()["count"]
+
+    sig_kepsek = generate_demo_signature_data_url(1)
+    sig_guru = generate_demo_signature_data_url(2)
+
+    if sig_count == 0 and sig_kepsek and sig_guru:
+        upsert_master_signature(
+            name="Sri Wastuti, S.Pd.",
+            role_title="Kepala Satuan Pendidikan (TK Pembina)",
+            image_data=sig_kepsek,
+            pen_color="#1E3A8A"
+        )
+        upsert_master_signature(
+            name="Puput Novia Dewi, S.Pd.",
+            role_title="Guru Kelompok / Wali Kelas",
+            image_data=sig_guru,
+            pen_color="#1E3A8A"
+        )
+
+    # 2. Sinkronkan template raport sampel di database jika ada
+    sample_tpl = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "samples", "TEMPLATE_RAPORT_TK_FULL.docx")
+    if os.path.exists(sample_tpl):
+        from engine.core.scanner import DocxTagScanner
+        scanner = DocxTagScanner(sample_tpl)
+        schema = scanner.scan()
+
+        cursor.execute("""
+        UPDATE workspace_templates 
+        SET schema_json = ? 
+        WHERE filename LIKE '%TEMPLATE_RAPORT_TK_FULL.docx%'
+        """, (json.dumps(schema.model_dump()),))
+
+        # Backfill ttd_kepsek dan ttd_guru ke records yang belum memilikinya
+        cursor.execute("SELECT id, data_json FROM workspace_records")
+        for rec_id, data_str in cursor.fetchall():
+            rec_data = json.loads(data_str)
+            updated = False
+            if "ttd_kepsek" not in rec_data or not rec_data["ttd_kepsek"]:
+                rec_data["ttd_kepsek"] = sig_kepsek
+                updated = True
+            if "ttd_guru" not in rec_data or not rec_data["ttd_guru"]:
+                rec_data["ttd_guru"] = sig_guru
+                updated = True
+            if updated:
+                cursor.execute("UPDATE workspace_records SET data_json = ? WHERE id = ?", (json.dumps(rec_data), rec_id))
+
+        conn.commit()
+
     cursor.execute("SELECT COUNT(*) as count FROM workspaces")
     count = cursor.fetchone()["count"]
     conn.close()

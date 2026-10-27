@@ -97,8 +97,9 @@ class DocxTagScanner:
             raw_expr = match.group(1).strip()
             self._process_var_expression(raw_expr)
 
+        tpl_name = self.docx_path.split("/")[-1].split("\\")[-1] if isinstance(self.docx_path, str) else "Template"
         schema = TemplateSchema(
-            template_name=self.docx_path.split("/")[-1].split("\\")[-1],
+            template_name=tpl_name,
             total_variables=len(self.detected_vars),
             variables=list(self.detected_vars.values()),
             loop_blocks=list(self.loop_blocks),
@@ -127,9 +128,20 @@ class DocxTagScanner:
                     )
             return
 
-        parts = [p.strip() for p in expr.split("|")]
-        key = parts[0]
-        filters = parts[1:] if len(parts) > 1 else []
+        # Cek apakah tag merupakan deklarasi gambar eksplisit: {{ image:ttd_kepsek:width=4.5cm }} atau {{ img:foto }}
+        is_image_tag = False
+        if expr.startswith("image:") or expr.startswith("img:"):
+            is_image_tag = True
+            prefix_len = 6 if expr.startswith("image:") else 4
+            content = expr[prefix_len:].strip()
+            # Pemisah bisa berupa titik dua :width=... atau tanda pipa |width=...
+            sub_parts = re.split(r"[:|]", content)
+            key = sub_parts[0].strip()
+            filters = sub_parts[1:] if len(sub_parts) > 1 else []
+        else:
+            parts = [p.strip() for p in expr.split("|")]
+            key = parts[0]
+            filters = parts[1:] if len(parts) > 1 else []
 
         # Bersihkan pemanggilan fungsi atau atribut (contoh: item.nama -> ambil nama dasarnya)
         if "." in key:
@@ -144,7 +156,12 @@ class DocxTagScanner:
         data_type = "string"
         is_ai_candidate = False
 
-        if any(f in filters for f in ["rupiah", "ribuan"]) or "gaji" in key or "harga" in key or "nominal" in key or "biaya" in key:
+        key_lower = key.lower()
+        if any(s in key_lower for s in ["ttd", "tanda_tangan", "tandatangan", "signature", "paraf"]):
+            data_type = "signature"
+        elif is_image_tag or any(s in key_lower for s in ["foto", "gambar", "logo", "avatar", "image"]):
+            data_type = "image"
+        elif any(f in filters for f in ["rupiah", "ribuan"]) or "gaji" in key or "harga" in key or "nominal" in key or "biaya" in key:
             data_type = "number"
         elif any(f in filters for f in ["format_date"]) or "tgl" in key or "tanggal" in key or "lahir" in key:
             data_type = "date"
@@ -163,7 +180,9 @@ class DocxTagScanner:
                 raw_tag=f"{{{{ {expr} }}}}"
             )
         else:
-            # Perbarui filter jika sudah ada
+            # Perbarui filter dan tipe jika lebih spesifik
+            if data_type in ("signature", "image"):
+                self.detected_vars[key].data_type = data_type
             for f in filters:
                 if f not in self.detected_vars[key].filters_used:
                     self.detected_vars[key].filters_used.append(f)
@@ -191,4 +210,22 @@ class DocxTagScanner:
         """
         Mengubah 'nama_lengkap_siswa' -> 'Nama Lengkap Siswa'
         """
+        special_names = {
+            "ttd_kepsek": "Tanda Tangan Kepala Sekolah",
+            "ttd_guru": "Tanda Tangan Guru Kelompok",
+            "ttd_wali": "Tanda Tangan Orang Tua / Wali",
+            "ttd_orang_tua": "Tanda Tangan Orang Tua",
+            "ttd": "Tanda Tangan Digital",
+            "nisn": "NISN",
+            "nik": "NIK",
+            "ttl": "Tempat & Tanggal Lahir",
+        }
+        lower = snake_str.lower()
+        if lower in special_names:
+            return special_names[lower]
+
+        if lower.startswith("ttd_"):
+            sub = snake_str[4:].replace("_", " ").title()
+            return f"Tanda Tangan {sub}"
+
         return " ".join(word.capitalize() for word in snake_str.replace("_", " ").split())

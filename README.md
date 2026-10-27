@@ -29,6 +29,12 @@
 6. **Penyimpanan Lokal & Data Lake (SQLite)**
    - Mendukung manajemen workspace dan data master lintas dokumen secara 100% offline dan privat di komputer lokal.
 
+7. **Tanda Tangan Digital & Master Signatures Registry**
+   - Mendukung pembubuhan tanda tangan langsung via Canvas Pad (mouse, touchpad, stylus pen).
+   - Unggah gambar tanda tangan dengan filter **Auto-Transparent (Hapus Latar Putih Kertas)** otomatis.
+   - Master Registry Tanda Tangan: simpan arsip tanda tangan pejabat, kepala sekolah, dan guru untuk dipakai berulang lintas dokumen.
+   - Injeksi OpenXML InlineImage presisi tinggi dengan graceful fallback jika tanda tangan belum dibubuhkan.
+
 ---
 
 ## 🏗️ Arsitektur & Teknologi

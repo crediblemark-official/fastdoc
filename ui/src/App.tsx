@@ -7,7 +7,8 @@ import {
   Trash2, 
   FileSpreadsheet, 
   CheckCircle2, 
-  AlertCircle 
+  AlertCircle,
+  Sparkles
 } from 'lucide-react';
 import { ExplorerNavbar } from './components/ExplorerNavbar';
 import { ExplorerSidebar } from './components/ExplorerSidebar';
@@ -18,6 +19,11 @@ import { ExplorerImportModal } from './components/ExplorerImportModal';
 import { MasterDataExplorer } from './components/MasterDataExplorer';
 import { AICopilotModal } from './components/AICopilotModal';
 import { DocumentPreviewModal } from './components/DocumentPreviewModal';
+import { MasterSignatureExplorer } from './components/MasterSignatureExplorer';
+import { VisualTemplateStudioModal } from './components/VisualTemplateStudioModal';
+import { WorkspaceTemplateCard } from './components/WorkspaceTemplateCard';
+import { TemplateVariablesModal } from './components/TemplateVariablesModal';
+import { TemplateManagerModal } from './components/TemplateManagerModal';
 import type { Workspace, WorkspaceRecord } from './types';
 
 export function App() {
@@ -25,7 +31,9 @@ export function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(null);
   const [isMasterDataActive, setIsMasterDataActive] = useState<boolean>(false);
+  const [isSignaturesActive, setIsSignaturesActive] = useState<boolean>(false);
   const [masterEntitiesCount, setMasterEntitiesCount] = useState<number>(0);
+  const [signaturesCount, setSignaturesCount] = useState<number>(0);
 
   const [viewMode, setViewMode] = useState<'grid' | 'table' | 'form'>('grid');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -49,6 +57,21 @@ export function App() {
 
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const templateFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Visual Template Studio State
+  const [visualStudioOpen, setVisualStudioOpen] = useState(false);
+  const [visualStudioData, setVisualStudioData] = useState<{
+    tempId: string;
+    filename: string;
+    html: string;
+    suggestedTags: any[];
+  } | null>(null);
+  const visualStudioFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Template Inspection & History Modals
+  const [variablesModalOpen, setVariablesModalOpen] = useState(false);
+  const [managerModalOpen, setManagerModalOpen] = useState(false);
+  const [isAddSignatureModalOpen, setIsAddSignatureModalOpen] = useState(false);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -77,11 +100,20 @@ export function App() {
         }
       })
       .catch((err) => console.error('Gagal mengambil data master:', err));
+
+    fetch('/api/signatures')
+      .then((res) => res.json())
+      .then((res) => {
+        if (res.status === 'success') {
+          setSignaturesCount(res.data.length);
+        }
+      })
+      .catch((err) => console.error('Gagal mengambil data tanda tangan:', err));
   }, [refreshKey]);
 
   // 2. Fetch full active workspace details (including records & templates)
   useEffect(() => {
-    if (!activeWorkspaceId || isMasterDataActive) return;
+    if (!activeWorkspaceId || isMasterDataActive || isSignaturesActive) return;
     fetch(`/api/workspaces/${activeWorkspaceId}`)
       .then((res) => res.json())
       .then((res) => {
@@ -91,17 +123,26 @@ export function App() {
         }
       })
       .catch((err) => console.error('Gagal mengambil detail workspace:', err));
-  }, [activeWorkspaceId, isMasterDataActive, refreshKey]);
+  }, [activeWorkspaceId, isMasterDataActive, isSignaturesActive, refreshKey]);
 
   // Switch to Master Data View
   const handleSelectMasterData = () => {
     setIsMasterDataActive(true);
+    setIsSignaturesActive(false);
+    setViewMode('table');
+  };
+
+  // Switch to Master Signatures View
+  const handleSelectSignatures = () => {
+    setIsSignaturesActive(true);
+    setIsMasterDataActive(false);
     setViewMode('table');
   };
 
   // Switch to a Workspace
   const handleSelectWorkspace = (id: string) => {
     setIsMasterDataActive(false);
+    setIsSignaturesActive(false);
     setActiveWorkspaceId(id);
     if (viewMode === 'form') {
       setViewMode('grid');
@@ -157,6 +198,107 @@ export function App() {
     } finally {
       setIsUploadingTemplate(false);
       if (templateFileInputRef.current) templateFileInputRef.current.value = '';
+    }
+  };
+
+  // Buka file .docx ke dalam Visual Template Studio (Word-like Mapper)
+  const handleOpenVisualStudioFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0] || !activeWorkspaceId) return;
+    const file = e.target.files[0];
+    setIsUploadingTemplate(true);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`/api/workspaces/${activeWorkspaceId}/preview-docx-html`, {
+        method: 'POST',
+        body: formData,
+      });
+      const json = await res.json();
+      if (res.ok && json.status === 'success') {
+        setVisualStudioData({
+          tempId: json.data.temp_id,
+          filename: json.data.filename,
+          html: json.data.html,
+          suggestedTags: json.data.suggested_tags || [],
+        });
+        setVisualStudioOpen(true);
+      } else {
+        showToast(json.detail || 'Gagal memuat pratinjau dokumen untuk studio', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    } finally {
+      setIsUploadingTemplate(false);
+      if (visualStudioFileInputRef.current) visualStudioFileInputRef.current.value = '';
+    }
+  };
+
+  // Buka template yang sedang aktif langsung ke dalam Visual Studio (tanpa upload ulang)
+  const handleOpenStudioForActiveTemplate = async () => {
+    if (!activeWorkspaceId) return;
+    setIsUploadingTemplate(true);
+    try {
+      const res = await fetch(`/api/workspaces/${activeWorkspaceId}/active-template/open-studio`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        setVisualStudioData({
+          tempId: data.data.temp_id,
+          filename: data.data.filename,
+          html: data.data.html,
+          suggestedTags: data.data.suggested_tags || [],
+        });
+        setVisualStudioOpen(true);
+      } else {
+        showToast(data.detail || 'Gagal membuka template di Studio', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    } finally {
+      setIsUploadingTemplate(false);
+    }
+  };
+
+  // Ganti template aktif dari riwayat workspace
+  const handleSetActiveTemplate = async (templateId: string) => {
+    if (!activeWorkspaceId) return;
+    try {
+      const res = await fetch(`/api/workspaces/${activeWorkspaceId}/active-template/${templateId}`, {
+        method: 'PUT',
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        setActiveWorkspace(data.data);
+        showToast('Template aktif berhasil diganti!', 'success');
+        setRefreshKey((k) => k + 1);
+      } else {
+        showToast(data.detail || 'Gagal mengganti template', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  // Hapus versi template dari riwayat workspace
+  const handleDeleteTemplate = async (templateId: string) => {
+    if (!activeWorkspaceId) return;
+    try {
+      const res = await fetch(`/api/workspaces/${activeWorkspaceId}/templates/${templateId}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        setActiveWorkspace(data.data);
+        showToast('Template berhasil dihapus dari workspace', 'success');
+        setRefreshKey((k) => k + 1);
+      } else {
+        showToast(data.detail || 'Gagal menghapus template', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'error');
     }
   };
 
@@ -361,7 +503,9 @@ export function App() {
   });
 
   const activeTemplate = activeWorkspace?.templates?.[0];
-  const currentPathTitle = isMasterDataActive
+  const currentPathTitle = isSignaturesActive
+    ? 'Master Registry: Tanda Tangan Digital'
+    : isMasterDataActive
     ? 'Master Registry Data Lake'
     : (activeWorkspace?.name || 'Workspace');
 
@@ -377,8 +521,11 @@ export function App() {
         onRefresh={() => setRefreshKey((k) => k + 1)}
         onNavigateHome={() => {
           setIsMasterDataActive(false);
+          setIsSignaturesActive(false);
           setViewMode('grid');
         }}
+        isSignaturesActive={isSignaturesActive}
+        onAddSignature={() => setIsAddSignatureModalOpen(true)}
       />
 
       {/* 2. Main Body: Left Sidebar + Center Canvas */}
@@ -390,14 +537,17 @@ export function App() {
           onSelectWorkspace={handleSelectWorkspace}
           onSelectMasterData={handleSelectMasterData}
           isMasterDataActive={isMasterDataActive}
+          onSelectSignatures={handleSelectSignatures}
+          isSignaturesActive={isSignaturesActive}
           onCreateWorkspace={handleCreateWorkspace}
           totalMasterEntities={masterEntitiesCount}
+          totalSignatures={signaturesCount}
         />
 
         {/* Center Canvas */}
         <main className="explorer-canvas">
           {/* Action Toolbar (Utilitarian Desktop Style) */}
-          {!isMasterDataActive && (
+          {!isMasterDataActive && !isSignaturesActive && (
             <div className="canvas-toolbar">
               <div className="toolbar-left">
                 {/* Tombol Input Data Baru */}
@@ -419,15 +569,40 @@ export function App() {
 
                 <div className="toolbar-divider" />
 
-                {/* Tombol Pasang Template Word */}
+                {/* Tombol Studio Pembuat Template Interaktif */}
+                <button
+                  className="btn-tool"
+                  onClick={() => {
+                    if (activeTemplate) {
+                      handleOpenStudioForActiveTemplate();
+                    } else {
+                      visualStudioFileInputRef.current?.click();
+                    }
+                  }}
+                  disabled={isUploadingTemplate}
+                  style={{ background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.4)' }}
+                  title={activeTemplate ? "Buka template aktif ini ke Visual Studio untuk mengedit variabel" : "Buka dokumen Word ke Visual Studio untuk klik dan tentukan variabel"}
+                >
+                  <Sparkles size={14} color="#0284C7" />
+                  <span style={{ color: '#0284C7', fontWeight: 600 }}>Studio Template Word</span>
+                </button>
+                <input
+                  type="file"
+                  ref={visualStudioFileInputRef}
+                  onChange={handleOpenVisualStudioFile}
+                  accept=".docx"
+                  style={{ display: 'none' }}
+                />
+
+                {/* Tombol Pasang / Ganti Template Word */}
                 <button
                   className="btn-tool"
                   onClick={() => templateFileInputRef.current?.click()}
                   disabled={isUploadingTemplate}
-                  title="Pasang template berkas Word (.docx) untuk workspace ini"
+                  title={activeTemplate ? "Ganti atau pasang file template Word (.docx) baru" : "Pasang template berkas Word (.docx) untuk workspace ini"}
                 >
                   <FileSpreadsheet size={14} color="var(--accent-blue)" />
-                  <span>{isUploadingTemplate ? 'Memproses...' : 'Pasang Template Word'}</span>
+                  <span>{isUploadingTemplate ? 'Memproses...' : activeTemplate ? 'Ganti Template' : 'Pasang Template Word'}</span>
                 </button>
                 <input
                   type="file"
@@ -483,44 +658,82 @@ export function App() {
 
           {/* Canvas Scroll View */}
           <div className="canvas-scroll-view">
-            {isMasterDataActive ? (
+            {isSignaturesActive ? (
+              <MasterSignatureExplorer
+                onBackToWorkspace={() => setIsSignaturesActive(false)}
+                onNotify={showToast}
+                searchQuery={searchQuery}
+                refreshTrigger={refreshKey}
+                isAddModalOpen={isAddSignatureModalOpen}
+                onOpenAddModal={() => setIsAddSignatureModalOpen(true)}
+                onCloseAddModal={() => setIsAddSignatureModalOpen(false)}
+                onSignatureAdded={() => {
+                  setRefreshKey((k) => k + 1);
+                  fetch('/api/signatures')
+                    .then((res) => res.json())
+                    .then((res) => {
+                      if (res.status === 'success') setSignaturesCount(res.data.length);
+                    });
+                }}
+              />
+            ) : isMasterDataActive ? (
               <MasterDataExplorer searchQuery={searchQuery} onRefreshTrigger={refreshKey} />
-            ) : viewMode === 'form' ? (
-              activeWorkspace ? (
-                <ExplorerFormView
-                  workspace={activeWorkspace}
-                  record={editingRecord}
-                  onSave={handleSaveRecord}
-                  onBack={() => setViewMode('grid')}
-                  onOpenAICopilot={handleOpenAICopilot}
-                  onDownloadDocx={(recId, fData) => {
-                    if (recId) handleDownloadSingle(editingRecord, undefined, 'docx');
-                    else handleDownloadSingle(null, fData, 'docx');
-                  }}
-                  onDownloadPdf={(recId, fData) => {
-                    if (recId) handleDownloadSingle(editingRecord, undefined, 'pdf');
-                    else handleDownloadSingle(null, fData, 'pdf');
-                  }}
-                  onPreview={handlePreviewDocument}
-                />
-              ) : null
-            ) : viewMode === 'table' ? (
-              <ExplorerTable
-                records={filteredRecords}
-                selectedIds={selectedRecordIds}
-                onToggleSelect={handleToggleSelect}
-                onToggleSelectAll={handleToggleSelectAll}
-                onOpenRecord={handleOpenRecord}
-                onDownloadSingle={handleDownloadSingle}
-                onDeleteRecord={handleDeleteRecord}
-              />
             ) : (
-              <ExplorerGrid
-                records={filteredRecords}
-                selectedIds={selectedRecordIds}
-                onToggleSelect={handleToggleSelect}
-                onOpenRecord={handleOpenRecord}
-              />
+              <>
+                {/* Hero / Banner Kartu Template Aktif */}
+                {activeWorkspace && (
+                  <WorkspaceTemplateCard
+                    workspace={activeWorkspace}
+                    activeTemplate={activeTemplate}
+                    onOpenVariables={() => setVariablesModalOpen(true)}
+                    onOpenManager={() => setManagerModalOpen(true)}
+                    onOpenStudioDirect={handleOpenStudioForActiveTemplate}
+                    onOpenStudioFilePicker={() => visualStudioFileInputRef.current?.click()}
+                    onUploadTemplatePicker={() => templateFileInputRef.current?.click()}
+                    onPreviewTemplate={() => handlePreviewDocument({})}
+                    onDownloadExcelTemplate={() => window.open(`/api/workspaces/${activeWorkspaceId}/excel-template`, '_blank')}
+                    isProcessingStudio={isUploadingTemplate}
+                  />
+                )}
+
+                {viewMode === 'form' ? (
+                  activeWorkspace ? (
+                    <ExplorerFormView
+                      workspace={activeWorkspace}
+                      record={editingRecord}
+                      onSave={handleSaveRecord}
+                      onBack={() => setViewMode('grid')}
+                      onOpenAICopilot={handleOpenAICopilot}
+                      onDownloadDocx={(recId, fData) => {
+                        if (recId) handleDownloadSingle(editingRecord, undefined, 'docx');
+                        else handleDownloadSingle(null, fData, 'docx');
+                      }}
+                      onDownloadPdf={(recId, fData) => {
+                        if (recId) handleDownloadSingle(editingRecord, undefined, 'pdf');
+                        else handleDownloadSingle(null, fData, 'pdf');
+                      }}
+                      onPreview={handlePreviewDocument}
+                    />
+                  ) : null
+                ) : viewMode === 'table' ? (
+                  <ExplorerTable
+                    records={filteredRecords}
+                    selectedIds={selectedRecordIds}
+                    onToggleSelect={handleToggleSelect}
+                    onToggleSelectAll={handleToggleSelectAll}
+                    onOpenRecord={handleOpenRecord}
+                    onDownloadSingle={handleDownloadSingle}
+                    onDeleteRecord={handleDeleteRecord}
+                  />
+                ) : (
+                  <ExplorerGrid
+                    records={filteredRecords}
+                    selectedIds={selectedRecordIds}
+                    onToggleSelect={handleToggleSelect}
+                    onOpenRecord={handleOpenRecord}
+                  />
+                )}
+              </>
             )}
           </div>
         </main>
@@ -530,12 +743,14 @@ export function App() {
       <footer className="window-statusbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontWeight: 500 }}>
-            {isMasterDataActive 
+            {isSignaturesActive
+              ? `${signaturesCount} tanda tangan tersimpan`
+              : isMasterDataActive 
               ? `${masterEntitiesCount} entitas master` 
               : `${records.length} item`}
           </span>
 
-          {!isMasterDataActive && (
+          {!isMasterDataActive && !isSignaturesActive && (
             <>
               <span style={{ color: 'var(--border-subtle)' }}>•</span>
               <span style={{
@@ -550,8 +765,12 @@ export function App() {
           {activeTemplate && !isMasterDataActive && (
             <>
               <span style={{ color: 'var(--border-subtle)' }}>•</span>
-              <span style={{ color: 'var(--text-muted)' }}>
-                Template: <strong style={{ color: 'var(--text-main)', fontWeight: 600 }}>{activeTemplate.filename}</strong> ({activeTemplate.schema.total_variables} variabel terdaftar)
+              <span
+                style={{ color: 'var(--text-muted)', cursor: 'pointer' }}
+                onClick={() => setVariablesModalOpen(true)}
+                title="Klik untuk membuka rincian variabel template"
+              >
+                Template Aktif: <strong style={{ color: 'var(--accent-blue)', fontWeight: 600 }}>{activeTemplate.filename}</strong> ({activeTemplate.schema.total_variables} variabel)
               </span>
             </>
           )}
@@ -603,6 +822,49 @@ export function App() {
             if (editingRecord?.id) handleDownloadSingle(editingRecord, undefined, 'pdf');
             else if (currentPreviewFormData) handleDownloadSingle(null, currentPreviewFormData, 'pdf');
           }}
+        />
+      )}
+
+      {/* Visual Template Studio Modal (Word-like Field Mapper) */}
+      {visualStudioOpen && visualStudioData && activeWorkspace && (
+        <VisualTemplateStudioModal
+          isOpen={visualStudioOpen}
+          onClose={() => setVisualStudioOpen(false)}
+          workspaceId={activeWorkspace.id}
+          tempId={visualStudioData.tempId}
+          filename={visualStudioData.filename}
+          initialHtml={visualStudioData.html}
+          suggestedTags={visualStudioData.suggestedTags}
+          onSuccess={(updatedWs) => {
+            setActiveWorkspace(updatedWs);
+            showToast(`Template Word "${visualStudioData.filename}" berhasil dibuat dan diaktifkan!`, 'success');
+            setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
+
+      {/* Template Variables Modal */}
+      {variablesModalOpen && activeTemplate && (
+        <TemplateVariablesModal
+          template={activeTemplate}
+          onClose={() => setVariablesModalOpen(false)}
+          onOpenStudio={handleOpenStudioForActiveTemplate}
+          onDownloadExcel={() => window.open(`/api/workspaces/${activeWorkspaceId}/excel-template`, '_blank')}
+        />
+      )}
+
+      {/* Template Manager / Switcher Modal */}
+      {managerModalOpen && activeWorkspace && (
+        <TemplateManagerModal
+          templates={activeWorkspace.templates || []}
+          activeTemplateId={activeTemplate?.id}
+          workspaceName={activeWorkspace.name}
+          onClose={() => setManagerModalOpen(false)}
+          onSelectActiveTemplate={handleSetActiveTemplate}
+          onDeleteTemplate={handleDeleteTemplate}
+          onUploadNew={() => templateFileInputRef.current?.click()}
+          onOpenStudio={handleOpenStudioForActiveTemplate}
+          onPreviewTemplate={() => handlePreviewDocument({})}
         />
       )}
 

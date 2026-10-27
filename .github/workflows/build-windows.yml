@@ -1,0 +1,220 @@
+name: Build & Release FastDoc for Windows
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tag versi rilis (contoh: v1.0.0). Kosongkan untuk rilis latest'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release Windows (.exe & Portable)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress
+          "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Determine Application Version & Release Metadata
+        id: versioning
+        shell: pwsh
+        run: |
+          $customTag = "${{ github.event.inputs.release_tag }}"
+          if ($env:GITHUB_REF -like "refs/tags/v*") {
+            $tag = $env:GITHUB_REF_NAME
+            $ver = $tag.TrimStart('v')
+            $title = "FastDoc Release $tag"
+            $isPrerelease = "false"
+          } elseif ($customTag -ne "") {
+            $tag = $customTag
+            $ver = $tag.TrimStart('v')
+            $title = "FastDoc Release $tag"
+            $isPrerelease = "false"
+          } else {
+            $tag = "latest"
+            $ver = "1.0.0"
+            $title = "FastDoc v$ver (Latest Windows Release)"
+            $isPrerelease = "false"
+          }
+          "APP_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_TITLE=$title" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "IS_PRERELEASE=$isPrerelease" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Target Version: $ver | Tag: $tag | Title: $title | Prerelease: $isPrerelease"
+
+      - name: Build Frontend UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Python Dependencies & PyInstaller
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller Pillow
+
+      - name: Ensure Application Icon Exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "packaging/icon.ico")) {
+            Write-Host "Generating icon.ico..."
+            python packaging/generate_icon.py
+          } else {
+            Write-Host "Found packaging/icon.ico"
+          }
+
+      - name: Bundle Desktop App via PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller --clean --noconfirm fastdoc.spec
+
+      - name: Verify PyInstaller Executable
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\FastDoc\FastDoc.exe")) {
+            Write-Error "FastDoc.exe was not generated in dist\FastDoc"
+            exit 1
+          }
+          Write-Host "FastDoc.exe successfully bundled!"
+          Get-ChildItem -Path dist\FastDoc | Select-Object Name, Length
+
+      - name: Compile Inno Setup Windows Installer
+        shell: pwsh
+        run: |
+          iscc "/DMyAppVersion=$env:APP_VERSION" packaging\inno_setup.iss
+
+      - name: Package Standalone Portable ZIP
+        shell: pwsh
+        run: |
+          $zipPath = "dist\FastDoc-Portable-v$($env:APP_VERSION)-windows-x64.zip"
+          Compress-Archive -Path dist\FastDoc\* -DestinationPath $zipPath -Force
+          Write-Host "Created portable archive: $zipPath"
+
+      - name: Generate Informative Release Notes
+        id: make_notes
+        shell: pwsh
+        run: |
+          $installer = Get-Item dist_installer\*.exe | Select-Object -First 1
+          $portable = Get-Item dist\*.zip | Select-Object -First 1
+
+          $installerHash = (Get-FileHash -Path $installer.FullName -Algorithm SHA256).Hash
+          $portableHash = (Get-FileHash -Path $portable.FullName -Algorithm SHA256).Hash
+
+          $installerSize = "{0:N2} MB" -f ($installer.Length / 1MB)
+          $portableSize = "{0:N2} MB" -f ($portable.Length / 1MB)
+
+          $releaseDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+
+          $lines = @(
+            "# 🚀 FastDoc for Windows v$($env:APP_VERSION)",
+            "",
+            "Aplikasi Desktop Otomasi Dokumen & Generator Template Cepat untuk Windows.",
+            "",
+            "---",
+            "",
+            "### 📦 Berkas Unduhan & Verifikasi Keaslian (Checksum SHA-256)",
+            "",
+            "| Berkas | Tipe | Ukuran | Checksum SHA-256 |",
+            "| :--- | :--- | :--- | :--- |",
+            "| **$($installer.Name)** | Windows Installer Wizard (.exe) | $installerSize | ``$installerHash`` |",
+            "| **$($portable.Name)** | Portable Standalone (.zip) | $portableSize | ``$portableHash`` |",
+            "",
+            "---",
+            "",
+            "### ✨ Fitur Unggulan di Versi Ini",
+            "- 🎨 **Visual Template Studio**: Pemetaan variabel interaktif langsung di atas dokumen dengan mode terang modern (drag & select teks untuk menentukan variabel).",
+            "- ✍️ **Master Signature Explorer**: Manajemen tanda tangan digital terpusat, pengisian dinamis, dan pratinjau dokumen instan.",
+            "- ⚡ **High-Speed OpenXML Engine**: Pemrosesan template DOCX cepat dan stabil berbasis Jinja2 & python-docx.",
+            "- 📊 **Excel Batch Processing**: Pembuatan ratusan dokumen otomatis dari file data spreadsheet Excel dalam hitungan detik.",
+            "- 🪟 **Modern Desktop GUI**: Tampilan native responsif berbasis Microsoft Edge WebView2 tanpa memunculkan jendela terminal hitam CMD.",
+            "",
+            "---",
+            "",
+            "### 💻 Panduan Instalasi",
+            "1. **Versi Installer (.exe)**:",
+            "   - Unduh berkas **$($installer.Name)**.",
+            "   - Jalankan installer dan ikuti petunjuk wizard (shortcut otomatis dibuat di Desktop & Start Menu).",
+            "2. **Versi Portable (.zip)**:",
+            "   - Unduh berkas **$($portable.Name)**.",
+            "   - Ekstrak ke folder pilihan Anda.",
+            "   - Buka folder hasil ekstraksi dan jalankan **FastDoc.exe** langsung tanpa perlu install.",
+            "",
+            "> 💡 **Catatan Keamanan Windows SmartScreen**:",
+            "> Jika muncul jendela proteksi *\"Windows protected your PC\"*, klik **More info** (Informasi selengkapnya) lalu pilih **Run anyway** (Tetap jalankan). Hal ini lumrah terjadi pada aplikasi rilis baru yang belum menggunakan sertifikat berbayar.",
+            "",
+            "---",
+            "",
+            "### 🖥️ Kebutuhan Sistem",
+            "- **Sistem Operasi**: Windows 10 (64-bit) / Windows 11",
+            "- **Runtime**: Microsoft Edge WebView2 (sudah terpasang bawaan pada Windows 10/11)",
+            "- **Arsitektur**: x64",
+            "",
+            "---",
+            "*Build: #$env:GITHUB_RUN_NUMBER | Commit: $env:GITHUB_SHA | Waktu Rilis: $releaseDate UTC*"
+          )
+
+          $lines -join "`r`n" | Out-File -FilePath release_body.md -Encoding utf8
+          Write-Host "Successfully generated release_body.md!"
+
+      - name: Upload Build Artifacts to GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastDoc-Windows-x64-v${{ env.APP_VERSION }}
+          path: |
+            dist_installer/*.exe
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist_installer/*.exe
+            dist/*.zip
+          name: ${{ env.RELEASE_TITLE }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          body_path: release_body.md
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}

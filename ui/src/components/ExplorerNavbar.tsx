@@ -9,7 +9,9 @@ import {
   Home, 
   Folder, 
   Database,
-  ChevronRight
+  ChevronRight,
+  PenTool,
+  Plus
 } from 'lucide-react';
 
 interface ExplorerNavbarProps {
@@ -20,6 +22,8 @@ interface ExplorerNavbarProps {
   onSearchChange: (q: string) => void;
   onRefresh: () => void;
   onNavigateHome: () => void;
+  isSignaturesActive?: boolean;
+  onAddSignature?: () => void;
 }
 
 export const ExplorerNavbar = ({
@@ -30,12 +34,14 @@ export const ExplorerNavbar = ({
   onSearchChange,
   onRefresh,
   onNavigateHome,
+  isSignaturesActive = false,
+  onAddSignature,
 }: ExplorerNavbarProps) => {
   return (
     <header className="window-topbar">
       {/* Tombol Panah Navigasi */}
       <div className="nav-arrows">
-        <button className="icon-btn" onClick={onNavigateHome} title="Kembali ke Beranda">
+        <button className="icon-btn" onClick={onNavigateHome} title="Kembali ke Workspace">
           <ArrowLeft size={15} />
         </button>
         <button className="icon-btn" disabled title="Maju">
@@ -52,7 +58,9 @@ export const ExplorerNavbar = ({
         <ChevronRight size={13} color="var(--text-disabled)" />
 
         <button className="path-crumb active">
-          {currentPath.includes('Master') ? (
+          {isSignaturesActive ? (
+            <PenTool size={14} color="var(--accent-blue)" />
+          ) : currentPath.includes('Master') ? (
             <Database size={14} color="var(--accent-blue)" />
           ) : (
             <Folder size={14} color="#D97706" />
@@ -66,39 +74,63 @@ export const ExplorerNavbar = ({
         <Search size={13} color="var(--text-dim)" />
         <input
           type="text"
-          placeholder="Cari data..."
+          placeholder={isSignaturesActive ? "Cari nama atau jabatan..." : "Cari data..."}
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
         />
       </div>
 
-      {/* View Mode Switcher (Grid / Table / Form) */}
-      <div className="view-mode-group">
+      {/* Jika Sedang di Master Tanda Tangan: Satukan Tombol Tambah ke Header! */}
+      {isSignaturesActive ? (
         <button
-          className={`view-mode-btn ${viewMode === 'grid' ? 'active' : ''}`}
-          onClick={() => onViewModeChange('grid')}
-          title="Tampilan Ikon Grid"
+          type="button"
+          className="btn-tool primary"
+          onClick={onAddSignature}
+          style={{
+            height: '30px',
+            padding: '0 12px',
+            fontSize: '12px',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            whiteSpace: 'nowrap',
+            boxShadow: '0 1px 2px rgba(2, 132, 199, 0.2)',
+          }}
+          title="Tambah tanda tangan digital pejabat atau guru baru"
         >
-          <LayoutGrid size={14} />
+          <Plus size={14} />
+          <span>+ Tambah Tanda Tangan Baru</span>
         </button>
-        <button
-          className={`view-mode-btn ${viewMode === 'table' ? 'active' : ''}`}
-          onClick={() => onViewModeChange('table')}
-          title="Tampilan Detail Tabulasi"
-        >
-          <List size={14} />
-        </button>
-        <button
-          className={`view-mode-btn ${viewMode === 'form' ? 'active' : ''}`}
-          onClick={() => onViewModeChange('form')}
-          title="Tampilan Formulir & Mention @"
-        >
-          <FileEdit size={14} />
-        </button>
-      </div>
+      ) : (
+        /* View Mode Switcher (Grid / Table / Form) */
+        <div className="view-mode-group">
+          <button
+            className={`view-mode-btn ${viewMode === 'grid' ? 'active' : ''}`}
+            onClick={() => onViewModeChange('grid')}
+            title="Tampilan Ikon Grid"
+          >
+            <LayoutGrid size={14} />
+          </button>
+          <button
+            className={`view-mode-btn ${viewMode === 'table' ? 'active' : ''}`}
+            onClick={() => onViewModeChange('table')}
+            title="Tampilan Detail Tabulasi"
+          >
+            <List size={14} />
+          </button>
+          <button
+            className={`view-mode-btn ${viewMode === 'form' ? 'active' : ''}`}
+            onClick={() => onViewModeChange('form')}
+            title="Tampilan Formulir & Mention @"
+          >
+            <FileEdit size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Refresh Button */}
-      <button className="icon-btn" onClick={onRefresh} title="Muat Ulang">
+      <button className="icon-btn" onClick={onRefresh} title="Segarkan Data">
         <RotateCw size={14} />
       </button>
     </header>

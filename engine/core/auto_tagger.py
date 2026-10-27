@@ -38,10 +38,40 @@ class SmartAutoTagger:
         return key or "field"
 
     @classmethod
+    def is_narrative_table(cls, rows_cells: List[List[str]]) -> bool:
+        """
+        Mendeteksi apakah tabel merupakan naskah naratif/kontrak dwibahasa
+        (bukan tabel formulir isian data).
+        """
+        if not rows_cells or len(rows_cells) < 2:
+            return False
+        long_rows = 0
+        total_len_c0 = 0
+        count_c0 = 0
+        for r in rows_cells:
+            if len(r) >= 2:
+                c0, c1 = r[0], r[1]
+                if len(c0) > 80 or len(c1) > 80:
+                    long_rows += 1
+                total_len_c0 += len(c0)
+                count_c0 += 1
+        avg_c0 = total_len_c0 / count_c0 if count_c0 else 0
+        return (long_rows / len(rows_cells) > 0.08) or (avg_c0 > 50)
+
+    @classmethod
+    def is_header_or_title(cls, text: str) -> bool:
+        """
+        Mendeteksi apakah baris teks merupakan judul pasal atau schedule lampiran.
+        """
+        t = text.strip().upper()
+        keywords = ["SCHEDULE", "LAMPIRAN", "DETAIL OF", "DETAIL LAYANAN", "PERJANJIAN", "AGREEMENT", "PASAL", "ARTICLE"]
+        return any(k in t for k in keywords)
+
+    @classmethod
     def detect_entities(cls, docx_path: str) -> Dict[str, Dict[str, Any]]:
         """
-        Mendeteksi seluruh pasangan [Label : Nilai] dan field dinamis
-        dari dokumen .docx secara murni berbasis struktur dokumen (tanpa kamus kata statis).
+        Mendeteksi seluruh pasangan [Label : Nilai], placeholder kurung siku [FIELD],
+        dan field formulir dari dokumen .docx.
         """
         detected: Dict[str, Dict[str, Any]] = {}
 
@@ -51,65 +81,104 @@ class SmartAutoTagger:
             tree = ET.fromstring(z.read('word/document.xml'))
 
         ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-        
-        # 1. Deteksi dari Paragraf Teks
+        p_tag = f"{{{ns['w']}}}p"
+        t_tag = f"{{{ns['w']}}}t"
+        tbl_tag = f"{{{ns['w']}}}tbl"
+        tr_tag = f"{{{ns['w']}}}tr"
+        tc_tag = f"{{{ns['w']}}}tc"
+
         paras: List[str] = []
-        for p in tree.iter(f'{{{ns["w"]}}}p'):
-            text = ''.join([n.text for n in p.iter(f'{{{ns["w"]}}}t') if n.text]).strip()
+        for p in tree.iter(p_tag):
+            text = ''.join([n.text for n in p.iter(t_tag) if n.text]).strip()
             if text:
                 paras.append(text)
 
-        # Pola umum dokumen universal:
-        # Pola A: Label : Nilai
-        # Pola B: Label ... Nilai (titik-titik leader)
-        for i, text in enumerate(paras):
-            # Abaikan jika ada banyak tanda titik dua di satu baris (teks menyatu tanpa pemisah rapi)
-            if text.count(':') > 2:
-                continue
-
-            colon_match = re.match(r'^([A-Za-z0-9\s/.,\(\)-]{2,40})\s*[:=]\s*(.+)$', text)
-            if colon_match:
-                label_raw = colon_match.group(1).strip()
-                val_raw = colon_match.group(2).strip()
-
-                # Pastikan nilai tidak memuat titik dua lagi (menandakan ada label lain di baris yang sama)
-                if ":" in val_raw:
+        bracket_pat = re.compile(r'\[([A-Z0-9_\s\.\/]{2,40})\]')
+        def process_brackets(txt: str):
+            for m in bracket_pat.finditer(txt):
+                tag = m.group(1).strip()
+                low = tag.lower()
+                if any(ign in low for ign in ['blank', 'halaman', 'sisa', 'page', 'empty']):
                     continue
+                if tag in ['...', '.....']:
+                    continue
+                k = cls.label_to_variable_key(tag)
+                if k and k not in detected:
+                    detected[k] = {
+                        'label': tag.title(),
+                        'value': f"[{tag}]",
+                        'key': k,
+                        'type': 'string',
+                        'match_type': 'bracket'
+                    }
 
-                # Abaikan jika nilai kosong atau terlalu panjang (paragraf penuh)
-                if 1 <= len(val_raw) <= 120:
-                    var_key = cls.label_to_variable_key(label_raw)
-                    # Jika belum ada atau jika entitas sebelumnya memiliki nilai yang lebih panjang/kotor
-                    if var_key:
-                        if var_key not in detected or len(val_raw) < len(detected[var_key]['value']):
+        # 1. Deteksi dari Paragraf Teks
+        for txt in paras:
+            process_brackets(txt)
+            if txt.count(':') <= 2:
+                colon_match = re.match(r'^([A-Za-z0-9\s/.,\(\)-]{2,40})\s*[:=]\s*(.+)$', txt)
+                if colon_match:
+                    label_raw = colon_match.group(1).strip()
+                    val_raw = colon_match.group(2).strip()
+
+                    if not cls.is_header_or_title(label_raw) and ":" not in val_raw and 1 <= len(val_raw) <= 120:
+                        var_key = cls.label_to_variable_key(label_raw)
+                        if var_key and (var_key not in detected or len(val_raw) < len(detected[var_key]['value'])):
                             detected[var_key] = {
                                 'label': label_raw,
                                 'value': val_raw,
                                 'key': var_key,
-                                'type': cls._infer_type(val_raw)
+                                'type': cls._infer_type(val_raw),
+                                'match_type': 'colon'
                             }
 
-        # 2. Deteksi dari Struktur Tabel Pasangan 2 Kolom (Label di Kolom 1, Nilai di Kolom 2)
-        for tbl in tree.iter(f'{{{ns["w"]}}}tbl'):
-            for tr in tbl.iter(f'{{{ns["w"]}}}tr'):
+        # 2. Deteksi dari Struktur Tabel
+        for tbl in tree.iter(tbl_tag):
+            rows_cells = []
+            for tr in tbl.iter(tr_tag):
                 cells = []
-                for tc in tr.iter(f'{{{ns["w"]}}}tc'):
-                    cell_text = ''.join([n.text for n in tc.iter(f'{{{ns["w"]}}}t') if n.text]).strip()
+                for tc in tr.iter(tc_tag):
+                    cell_text = ''.join([n.text for n in tc.iter(t_tag) if n.text]).strip()
                     cells.append(cell_text)
-                
-                # Jika tabel berisi 2 kolom atau kolom 1 diakhiri tanda titik dua
-                if len(cells) >= 2:
-                    c1 = cells[0].rstrip(':').strip()
-                    c2 = cells[1].strip()
+                if cells:
+                    rows_cells.append(cells)
+
+            for row in rows_cells:
+                for cell in row:
+                    process_brackets(cell)
+
+            is_nar = cls.is_narrative_table(rows_cells)
+
+            for row in rows_cells:
+                # Pola 3 kolom [Label, ":", Nilai] (misal tabel pengesahan tanda tangan)
+                if len(row) == 3 and row[1] == ':' and 2 <= len(row[0]) <= 80:
+                    lbl = row[0].strip()
+                    val = row[2].strip()
+                    k = cls.label_to_variable_key(lbl)
+                    if k and k not in detected:
+                        detected[k] = {
+                            'label': lbl,
+                            'value': val if val else f"[{lbl}]",
+                            'key': k,
+                            'type': 'string',
+                            'match_type': 'table3',
+                            'table_label': lbl
+                        }
+
+                # Pola 2 kolom [Label, Nilai] HANYA jika BUKAN tabel naskah naratif
+                elif not is_nar and len(row) == 2:
+                    c1 = row[0].rstrip(':').strip()
+                    c2 = row[1].strip()
                     if 2 <= len(c1) <= 35 and 1 <= len(c2) <= 120 and ":" not in c2:
-                        key = cls.label_to_variable_key(c1)
-                        if key:
-                            if key not in detected or len(c2) < len(detected[key]['value']):
+                        if not cls.is_header_or_title(c1) and not cls.is_header_or_title(c2):
+                            key = cls.label_to_variable_key(c1)
+                            if key and (key not in detected or len(c2) < len(detected[key]['value'])):
                                 detected[key] = {
                                     'label': c1,
                                     'value': c2,
                                     'key': key,
-                                    'type': cls._infer_type(c2)
+                                    'type': cls._infer_type(c2),
+                                    'match_type': 'table2'
                                 }
 
         return detected
@@ -180,19 +249,56 @@ class SmartAutoTagger:
         """
         from engine.core.run_reconciler import RunReconciler
         reconciled_stream = RunReconciler.reconcile_docx(input_docx)
+        ns_w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        W_TC = f"{{{ns_w}}}tc"
+        W_TR = f"{{{ns_w}}}tr"
+        W_P = f"{{{ns_w}}}p"
+        W_R = f"{{{ns_w}}}r"
+        W_T = f"{{{ns_w}}}t"
 
         with zipfile.ZipFile(reconciled_stream, 'r') as zin:
             with zipfile.ZipFile(output_docx, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
                 for item in zin.infolist():
                     content = zin.read(item.filename)
-                    if item.filename.startswith('word/') and item.filename.endswith('.xml'):
+                    if item.filename == 'word/document.xml':
+                        tree = ET.fromstring(content)
+                        # Sisipkan tag ke dalam sel kosong tabel 3 kolom (misal tanda tangan)
+                        for ent in entities.values():
+                            if ent.get('match_type') == 'table3' and ent.get('table_label'):
+                                t_lbl = ent['table_label'].lower()
+                                for tr in tree.iter(W_TR):
+                                    tcs = list(tr.iter(W_TC))
+                                    if len(tcs) == 3:
+                                        c0_txt = "".join(tcs[0].itertext()).strip().lower()
+                                        c1_txt = "".join(tcs[1].itertext()).strip()
+                                        c2_txt = "".join(tcs[2].itertext()).strip()
+                                        if c1_txt == ":" and not c2_txt and t_lbl in c0_txt:
+                                            p = tcs[2].find(W_P)
+                                            if p is None:
+                                                p = ET.SubElement(tcs[2], W_P)
+                                            r = ET.SubElement(p, W_R)
+                                            t = ET.SubElement(r, W_T)
+                                            t.text = f"{{{{ {ent['key']} }}}}"
+
+                        xml_str = ET.tostring(tree, encoding='utf-8').decode('utf-8')
+                        sorted_items = sorted(entities.values(), key=lambda x: len(x['value']), reverse=True)
+                        for ent in sorted_items:
+                            val = ent['value']
+                            key = ent['key']
+                            if len(val) >= 2 and ent.get('match_type') != 'table3':
+                                escaped_val = val.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                                if val in xml_str:
+                                    xml_str = xml_str.replace(val, f"{{{{ {key} }}}}")
+                                elif escaped_val in xml_str:
+                                    xml_str = xml_str.replace(escaped_val, f"{{{{ {key} }}}}")
+                        content = xml_str.encode('utf-8')
+                    elif item.filename.startswith('word/') and item.filename.endswith('.xml'):
                         xml_str = content.decode('utf-8', errors='ignore')
                         sorted_items = sorted(entities.values(), key=lambda x: len(x['value']), reverse=True)
                         for ent in sorted_items:
                             val = ent['value']
                             key = ent['key']
-                            if len(val) >= 2:
-                                # Cek bentuk teks langsung dan bentuk XML-escaped
+                            if len(val) >= 2 and ent.get('match_type') != 'table3':
                                 escaped_val = val.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                                 if val in xml_str:
                                     xml_str = xml_str.replace(val, f"{{{{ {key} }}}}")

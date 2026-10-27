@@ -64,16 +64,26 @@ class RunReconciler:
             for t in r.iter(W_T):
                 t_elems.append(t)
 
+        # 1. Normalisasi tag gambar khusus {{ image:key:... }} atau {{ img:key:... }} -> {{ key }}
+        for r in p_elem.iter(W_R):
+            for t in r.iter(W_T):
+                if t.text and ("image:" in t.text or "img:" in t.text):
+                    t.text = re.sub(
+                        r"\{\{\s*(?:image|img):([a-zA-Z0-9_]+)(?:[^}]*?)\s*\}\}",
+                        r"{{ \1 }}",
+                        t.text
+                    )
+
         if len(t_elems) < 2:
             return
 
         combined_text = "".join(t.text or "" for t in t_elems)
-        # Jika tidak ada karakter '{', tidak ada tag Jinja2 yang terancam terpecah
-        if "{" not in combined_text:
+        # Jika tidak ada karakter '{' atau '[', tidak ada tag Jinja2 atau placeholder yang terancam terpecah
+        if "{" not in combined_text and "[" not in combined_text:
             return
 
-        # Pola deteksi tag Jinja: {{ ... }} atau {% ... %}
-        jinja_pattern = re.compile(r"(\{\{[^{}]*?\}\}|\{%[^{}]*?%\})")
+        # Pola deteksi tag Jinja: {{ ... }}, {% ... %}, serta bracket placeholder: [ ... ]
+        jinja_pattern = re.compile(r"(\{\{[^{}]*?\}\}|\{%[^{}]*?%\}|\[[A-Z0-9_\s\.\/]{2,40}\])")
 
         # Petakan rentang indeks setiap t_elem dalam combined_text
         char_index = 0
@@ -110,8 +120,9 @@ class RunReconciler:
                 offset_in_first = tag_start - first_elem_info[0]
                 prefix = (first_t.text or "")[:offset_in_first]
                 
-                # Masukkan seluruh tag utuh ke first_t
-                first_t.text = prefix + tag_str
+                # Masukkan seluruh tag utuh ke first_t (dengan normalisasi image: jika ada)
+                normalized_tag = re.sub(r"\{\{\s*(?:image|img):([a-zA-Z0-9_]+)(?:[^}]*?)\s*\}\}", r"{{ \1 }}", tag_str)
+                first_t.text = prefix + normalized_tag
 
                 # Kosongkan bagian tag dari elemen-elemen berikutnya
                 for mid_idx in range(start_elem_idx + 1, end_elem_idx):

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Download, Sparkles, RefreshCw, FileCheck } from 'lucide-react';
 import type { VariableMeta } from '../types';
 import { AICopilotModal } from './AICopilotModal';
+import { SignatureFieldWidget } from './SignatureFieldWidget';
 
 interface SingleFormViewProps {
   templateId: string;
@@ -112,13 +113,20 @@ export const SingleFormView = ({
       <form onSubmit={handleGenerate}>
         <div className="form-grid">
           {scalarVars.map((v) => {
-            const isMultiline = v.data_type === 'text_multiline' || v.is_ai_candidate;
+            const isSignature = v.data_type === 'signature' ||
+              v.key.startsWith('ttd') ||
+              v.key.includes('tanda_tangan') ||
+              v.key.includes('tandatangan') ||
+              v.key.includes('signature') ||
+              v.key.includes('paraf');
+
+            const isMultiline = !isSignature && (v.data_type === 'text_multiline' || v.is_ai_candidate);
             const inputVal = formData[v.key] ?? '';
 
             return (
               <div
                 key={v.key}
-                className={`form-group ${isMultiline ? 'full-width' : ''}`}
+                className={`form-group ${isMultiline || isSignature ? 'full-width' : ''}`}
               >
                 <div className="form-label">
                   <span>
@@ -136,7 +144,14 @@ export const SingleFormView = ({
                   )}
                 </div>
 
-                {isMultiline ? (
+                {isSignature ? (
+                  <SignatureFieldWidget
+                    fieldKey={v.key}
+                    fieldLabel={v.display_name}
+                    value={inputVal}
+                    onChange={(dataUrl) => handleInputChange(v.key, dataUrl)}
+                  />
+                ) : isMultiline ? (
                   <textarea
                     className="form-textarea"
                     value={inputVal}

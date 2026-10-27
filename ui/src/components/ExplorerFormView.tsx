@@ -14,6 +14,7 @@ import {
   Trash2
 } from 'lucide-react';
 import type { Workspace, WorkspaceRecord, MasterEntity, VariableMeta } from '../types';
+import { SignatureFieldWidget } from './SignatureFieldWidget';
 
 interface ExplorerFormViewProps {
   workspace: Workspace;
@@ -390,7 +391,14 @@ export const ExplorerFormView = ({
                 );
               }
 
-              const isMultiline = v.data_type === 'text_multiline' || v.key.includes('catatan') || v.key.includes('deskripsi') || v.key.includes('narasi') || v.key.includes('keterangan');
+              const isSignature = v.data_type === 'signature' ||
+                v.key.startsWith('ttd') ||
+                v.key.includes('tanda_tangan') ||
+                v.key.includes('tandatangan') ||
+                v.key.includes('signature') ||
+                v.key.includes('paraf');
+
+              const isMultiline = !isSignature && (v.data_type === 'text_multiline' || v.key.includes('catatan') || v.key.includes('deskripsi') || v.key.includes('narasi') || v.key.includes('keterangan'));
 
               return (
                 <div
@@ -423,7 +431,14 @@ export const ExplorerFormView = ({
                     )}
                   </label>
 
-                  {isMultiline ? (
+                  {isSignature ? (
+                    <SignatureFieldWidget
+                      fieldKey={v.key}
+                      fieldLabel={v.display_name}
+                      value={val}
+                      onChange={(dataUrl) => handleFieldChange(v.key, dataUrl)}
+                    />
+                  ) : isMultiline ? (
                     <textarea
                       className="exp-textarea"
                       value={val}

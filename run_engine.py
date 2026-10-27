@@ -20,7 +20,7 @@ def main():
         host="127.0.0.1",
         port=port,
         log_level="info",
-        reload=False
+        reload=True
     )
 
 if __name__ == "__main__":

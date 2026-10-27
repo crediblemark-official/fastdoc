@@ -24,6 +24,10 @@ from engine.db.database import (
     add_record_to_workspace,
     update_workspace_record,
     delete_workspace_record,
+    get_master_signatures,
+    get_master_signature_by_id,
+    upsert_master_signature,
+    delete_master_signature,
     get_db_connection
 )
 from engine.core.scanner import DocxTagScanner
@@ -31,6 +35,8 @@ from engine.core.renderer import TemplateRenderer
 from engine.core.excel_parser import ExcelManager
 from engine.core.batch import BatchGenerator
 from engine.core.auto_tagger import SmartAutoTagger
+from engine.core.preview_renderer import PreviewRenderer
+from engine.core.template_builder import TemplateBuilder
 
 router = APIRouter(prefix="/api", tags=["Workspaces & Master Hub"])
 
@@ -113,6 +119,233 @@ async def upload_workspace_template(workspace_id: str, file: UploadFile = File(.
     """, (tpl_id, workspace_id, file.filename, saved_path, json.dumps(schema.model_dump())))
 
     cursor.execute("UPDATE workspaces SET active_template_id = ? WHERE id = ?", (tpl_id, workspace_id))
+    conn.commit()
+    conn.close()
+
+    return {"status": "success", "data": get_workspace_by_id(workspace_id)}
+
+
+class CommitCustomTemplateRequest(BaseModel):
+    temp_id: str
+    filename: str
+    tags: List[Dict[str, Any]]
+
+
+@router.post("/workspaces/{workspace_id}/preview-docx-html")
+async def preview_docx_html_for_workspace(workspace_id: str, file: UploadFile = File(...)):
+    """
+    Mengunggah file .docx mentah untuk ditampilkan di Visual Template Studio.
+    Mengembalikan HTML lembar A4 yang interaktif dan daftar saran placeholder.
+    """
+    ws = get_workspace_by_id(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace tidak ditemukan")
+    if not file.filename.endswith(".docx"):
+        raise HTTPException(status_code=400, detail="File wajib berformat .docx")
+
+    import re
+    temp_id = f"temp_{uuid.uuid4().hex[:8]}"
+    file_bytes = await file.read()
+    temp_path = os.path.join(STORAGE_DIR, f"{temp_id}_{file.filename}")
+    with open(temp_path, "wb") as f:
+        f.write(file_bytes)
+
+    # 1. Konversi ke HTML lembar A4
+    styled_html = PreviewRenderer.render_preview_html(temp_path)
+
+    # 2. Pindai jika ada tag {{ ... }} yang sudah ada
+    existing_scanner = DocxTagScanner(temp_path)
+    existing_schema = existing_scanner.scan()
+
+    # 3. Ekstrak placeholder kurung siku seperti [COMPANY NAME] sebagai saran
+    suggested_tags = []
+    seen = set()
+    bracket_matches = re.findall(r"\[([A-Z0-9_\s\.\/]{2,40})\]", styled_html)
+    for tag in bracket_matches:
+        tag_str = tag.strip()
+        low = tag_str.lower()
+        if any(ign in low for ign in ["blank", "halaman", "sisa", "page", "empty"]):
+            continue
+        if tag_str not in seen:
+            seen.add(tag_str)
+            clean_key = re.sub(r"[^a-zA-Z0-9\s]+", " ", tag_str.lower()).strip()
+            clean_key = re.sub(r"\s+", "_", clean_key).strip("_")
+            suggested_tags.append({
+                "original_text": f"[{tag_str}]",
+                "key": clean_key or "field",
+                "label": tag_str.title(),
+                "data_type": "string"
+            })
+
+    return {
+        "status": "success",
+        "data": {
+            "temp_id": temp_id,
+            "filename": file.filename,
+            "html": styled_html,
+            "existing_variables": [v.model_dump() for v in existing_schema.variables],
+            "suggested_tags": suggested_tags
+        }
+    }
+
+
+@router.post("/workspaces/{workspace_id}/commit-custom-template")
+def commit_custom_template(workspace_id: str, req: CommitCustomTemplateRequest):
+    """
+    Menyimpan hasil pemetaan variabel dari Visual Template Studio ke dalam berkas Word asli.
+    """
+    ws = get_workspace_by_id(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace tidak ditemukan")
+
+    temp_path = None
+    for f in os.listdir(STORAGE_DIR):
+        if f.startswith(f"{req.temp_id}_"):
+            temp_path = os.path.join(STORAGE_DIR, f)
+            break
+
+    if not temp_path or not os.path.exists(temp_path):
+        raise HTTPException(status_code=404, detail="Berkas draf sementara tidak ditemukan atau sudah kedaluwarsa")
+
+    tpl_id = f"tpl_{uuid.uuid4().hex[:8]}"
+    saved_path = os.path.join(STORAGE_DIR, f"{tpl_id}_{req.filename}")
+
+    # Suntikkan tag yang ditentukan user ke docx
+    schema = TemplateBuilder.apply_tags_to_docx(temp_path, saved_path, req.tags)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    INSERT INTO workspace_templates (id, workspace_id, filename, file_path, schema_json)
+    VALUES (?, ?, ?, ?, ?)
+    """, (tpl_id, workspace_id, req.filename, saved_path, json.dumps(schema.model_dump())))
+
+    cursor.execute("UPDATE workspaces SET active_template_id = ? WHERE id = ?", (tpl_id, workspace_id))
+    conn.commit()
+    conn.close()
+
+    # Bersihkan file temp
+    try:
+        os.remove(temp_path)
+    except Exception:
+        pass
+
+    return {
+        "status": "success",
+        "data": get_workspace_by_id(workspace_id),
+        "schema": schema.model_dump()
+    }
+
+
+@router.post("/workspaces/{workspace_id}/active-template/open-studio")
+def open_active_template_in_studio(workspace_id: str):
+    """
+    Membuka template yang saat ini aktif di workspace langsung ke Visual Template Studio
+    tanpa perlu mengunggah ulang file dari komputer.
+    """
+    import shutil
+    import re
+    ws = get_workspace_by_id(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace tidak ditemukan")
+    if not ws.get("templates"):
+        raise HTTPException(status_code=400, detail="Workspace belum memiliki template aktif")
+
+    active_tpl = ws["templates"][0]
+    source_path = active_tpl["file_path"]
+    if not os.path.exists(source_path):
+        raise HTTPException(status_code=404, detail="Berkas fisik template tidak ditemukan")
+
+    temp_id = f"temp_{uuid.uuid4().hex[:8]}"
+    temp_path = os.path.join(STORAGE_DIR, f"{temp_id}_{active_tpl['filename']}")
+    shutil.copy2(source_path, temp_path)
+
+    styled_html = PreviewRenderer.render_preview_html(temp_path)
+    existing_scanner = DocxTagScanner(temp_path)
+    existing_schema = existing_scanner.scan()
+
+    suggested_tags = []
+    seen = set()
+    bracket_matches = re.findall(r"\[([A-Z0-9_\s\.\/]{2,40})\]", styled_html)
+    for tag in bracket_matches:
+        tag_str = tag.strip()
+        low = tag_str.lower()
+        if any(ign in low for ign in ["blank", "halaman", "sisa", "page", "empty"]):
+            continue
+        if tag_str not in seen:
+            seen.add(tag_str)
+            clean_key = re.sub(r"[^a-zA-Z0-9\s]+", " ", tag_str.lower()).strip()
+            clean_key = re.sub(r"\s+", "_", clean_key).strip("_")
+            suggested_tags.append({
+                "original_text": f"[{tag_str}]",
+                "key": clean_key or "field",
+                "label": tag_str.title(),
+                "data_type": "string"
+            })
+
+    return {
+        "status": "success",
+        "data": {
+            "temp_id": temp_id,
+            "filename": active_tpl["filename"],
+            "html": styled_html,
+            "existing_variables": [v.model_dump() for v in existing_schema.variables],
+            "suggested_tags": suggested_tags
+        }
+    }
+
+
+@router.put("/workspaces/{workspace_id}/active-template/{template_id}")
+def set_active_template_for_workspace(workspace_id: str, template_id: str):
+    """
+    Mengganti template aktif pada workspace ke salah satu template yang tersimpan.
+    """
+    ws = get_workspace_by_id(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace tidak ditemukan")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM workspace_templates WHERE id = ? AND workspace_id = ?", (template_id, workspace_id))
+    tpl = cursor.fetchone()
+    if not tpl:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Template tidak ditemukan di workspace ini")
+
+    cursor.execute("UPDATE workspaces SET active_template_id = ? WHERE id = ?", (template_id, workspace_id))
+    conn.commit()
+    conn.close()
+
+    return {"status": "success", "data": get_workspace_by_id(workspace_id)}
+
+
+@router.delete("/workspaces/{workspace_id}/templates/{template_id}")
+def delete_workspace_template(workspace_id: str, template_id: str):
+    """
+    Menghapus template tertentu dari riwayat workspace.
+    """
+    ws = get_workspace_by_id(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace tidak ditemukan")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path FROM workspace_templates WHERE id = ? AND workspace_id = ?", (template_id, workspace_id))
+    row = cursor.fetchone()
+    if row and row["file_path"] and os.path.exists(row["file_path"]):
+        try:
+            os.remove(row["file_path"])
+        except Exception:
+            pass
+
+    cursor.execute("DELETE FROM workspace_templates WHERE id = ? AND workspace_id = ?", (template_id, workspace_id))
+
+    if ws.get("active_template_id") == template_id:
+        cursor.execute("SELECT id FROM workspace_templates WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 1", (workspace_id,))
+        remaining = cursor.fetchone()
+        new_active = remaining["id"] if remaining else None
+        cursor.execute("UPDATE workspaces SET active_template_id = ? WHERE id = ?", (new_active, workspace_id))
+
     conn.commit()
     conn.close()
 
@@ -349,3 +582,48 @@ class UpsertEntityRequest(BaseModel):
 def save_entity(req: UpsertEntityRequest):
     ent = upsert_master_entity(req.display_name, req.attributes, req.entity_type)
     return {"status": "success", "data": ent}
+
+
+# ==============================================================================
+# Master Signatures Hub (Tanda Tangan Digital Tersimpan)
+# ==============================================================================
+
+@router.get("/signatures")
+def list_signatures():
+    """
+    Mengambil seluruh daftar tanda tangan resmi yang tersimpan di Master Registry.
+    """
+    signatures = get_master_signatures()
+    return {"status": "success", "data": signatures}
+
+
+class UpsertSignatureRequest(BaseModel):
+    id: Optional[str] = None
+    name: str
+    role_title: Optional[str] = ""
+    image_data: str
+    pen_color: Optional[str] = "#1E3A8A"
+
+
+@router.post("/signatures")
+def save_signature(req: UpsertSignatureRequest):
+    """
+    Menyimpan atau memperbarui tanda tangan ke Master Registry.
+    """
+    sig = upsert_master_signature(
+        name=req.name,
+        role_title=req.role_title or "",
+        image_data=req.image_data,
+        pen_color=req.pen_color or "#1E3A8A",
+        sig_id=req.id
+    )
+    return {"status": "success", "data": sig}
+
+
+@router.delete("/signatures/{sig_id}")
+def remove_signature(sig_id: str):
+    """
+    Menghapus tanda tangan dari Master Registry.
+    """
+    delete_master_signature(sig_id)
+    return {"status": "success", "message": "Tanda tangan berhasil dihapus"}
