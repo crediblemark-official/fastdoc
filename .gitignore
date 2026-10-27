@@ -11,6 +11,7 @@ build/
 dist/
 dist_installer/
 downloads/
+release_body.md
 eggs/
 .eggs/
 lib/

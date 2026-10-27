@@ -130,70 +130,9 @@ jobs:
           Write-Host "Created portable archive: $zipPath"
 
       - name: Generate Informative Release Notes
-        id: make_notes
         shell: pwsh
         run: |
-          $installer = Get-Item dist_installer\*.exe | Select-Object -First 1
-          $portable = Get-Item dist\*.zip | Select-Object -First 1
-
-          $installerHash = (Get-FileHash -Path $installer.FullName -Algorithm SHA256).Hash
-          $portableHash = (Get-FileHash -Path $portable.FullName -Algorithm SHA256).Hash
-
-          $installerSize = "{0:N2} MB" -f ($installer.Length / 1MB)
-          $portableSize = "{0:N2} MB" -f ($portable.Length / 1MB)
-
-          $releaseDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
-
-          $lines = @(
-            "# 🚀 FastDoc for Windows v$($env:APP_VERSION)",
-            "",
-            "Aplikasi Desktop Otomasi Dokumen & Generator Template Cepat untuk Windows.",
-            "",
-            "---",
-            "",
-            "### 📦 Berkas Unduhan & Verifikasi Keaslian (Checksum SHA-256)",
-            "",
-            "| Berkas | Tipe | Ukuran | Checksum SHA-256 |",
-            "| :--- | :--- | :--- | :--- |",
-            "| **$($installer.Name)** | Windows Installer Wizard (.exe) | $installerSize | ``$installerHash`` |",
-            "| **$($portable.Name)** | Portable Standalone (.zip) | $portableSize | ``$portableHash`` |",
-            "",
-            "---",
-            "",
-            "### ✨ Fitur Unggulan di Versi Ini",
-            "- 🎨 **Visual Template Studio**: Pemetaan variabel interaktif langsung di atas dokumen dengan mode terang modern (drag & select teks untuk menentukan variabel).",
-            "- ✍️ **Master Signature Explorer**: Manajemen tanda tangan digital terpusat, pengisian dinamis, dan pratinjau dokumen instan.",
-            "- ⚡ **High-Speed OpenXML Engine**: Pemrosesan template DOCX cepat dan stabil berbasis Jinja2 & python-docx.",
-            "- 📊 **Excel Batch Processing**: Pembuatan ratusan dokumen otomatis dari file data spreadsheet Excel dalam hitungan detik.",
-            "- 🪟 **Modern Desktop GUI**: Tampilan native responsif berbasis Microsoft Edge WebView2 tanpa memunculkan jendela terminal hitam CMD.",
-            "",
-            "---",
-            "",
-            "### 💻 Panduan Instalasi",
-            "1. **Versi Installer (.exe)**:",
-            "   - Unduh berkas **$($installer.Name)**.",
-            "   - Jalankan installer dan ikuti petunjuk wizard (shortcut otomatis dibuat di Desktop & Start Menu).",
-            "2. **Versi Portable (.zip)**:",
-            "   - Unduh berkas **$($portable.Name)**.",
-            "   - Ekstrak ke folder pilihan Anda.",
-            "   - Buka folder hasil ekstraksi dan jalankan **FastDoc.exe** langsung tanpa perlu install.",
-            "",
-            "> 💡 **Catatan Keamanan Windows SmartScreen**:",
-            "> Jika muncul jendela proteksi *\"Windows protected your PC\"*, klik **More info** (Informasi selengkapnya) lalu pilih **Run anyway** (Tetap jalankan). Hal ini lumrah terjadi pada aplikasi rilis baru yang belum menggunakan sertifikat berbayar.",
-            "",
-            "---",
-            "",
-            "### 🖥️ Kebutuhan Sistem",
-            "- **Sistem Operasi**: Windows 10 (64-bit) / Windows 11",
-            "- **Runtime**: Microsoft Edge WebView2 (sudah terpasang bawaan pada Windows 10/11)",
-            "- **Arsitektur**: x64",
-            "",
-            "---",
-            "*Build: #$env:GITHUB_RUN_NUMBER | Commit: $env:GITHUB_SHA | Waktu Rilis: $releaseDate UTC*"
-          )
-
-          $lines -join "`r`n" | Out-File -FilePath release_body.md -Encoding utf8
-          Write-Host "Successfully generated release_body.md!"
+          python packaging/generate_release_notes.py
 
       - name: Upload Build Artifacts to GitHub Actions
         uses: actions/upload-artifact@v4
